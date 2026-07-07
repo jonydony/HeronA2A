@@ -61,31 +61,6 @@ def max_calls() -> int:
     return _MAX_CALLS
 
 
-def diagnose() -> dict:
-    """Temporary: make one raw call and return status + body so we can see why calls fail."""
-    if not configured():
-        return {"configured": False, "base": _BASE, "model": _MODEL}
-    out = {"base": _BASE, "model": _MODEL, "cf_token_set": bool(_CF_ID and _CF_SECRET)}
-    h = _headers()
-    try:
-        p = httpx.post(f"{_BASE}/chat/completions", headers=h,
-                       json={"model": _MODEL, "max_tokens": 50,
-                             "messages": [{"role": "user", "content": 'Reply with only {"ok":true}'}]},
-                       timeout=30, follow_redirects=False)
-        out["post_status"] = p.status_code
-        out["post_location"] = p.headers.get("location")
-        out["post_body"] = p.text[:200]
-    except Exception as e:
-        out["post_error"] = str(e)[:200]
-    try:
-        m = httpx.get(f"{_BASE}/models", headers=h, timeout=20, follow_redirects=True)
-        out["models_status"] = m.status_code
-        out["models_body"] = m.text[:250]
-    except Exception as e:
-        out["models_error"] = str(e)[:200]
-    return out
-
-
 def _complete_json(system: str, user: str, max_tokens: int = 2048) -> dict | None:
     """POST an OpenAI-style chat completion, expect a JSON object back. None on any failure."""
     global _calls
