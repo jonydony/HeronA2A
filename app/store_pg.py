@@ -17,7 +17,9 @@ _DSN = os.environ.get("DATABASE_URL", "")
 
 
 def _conn():
-    return psycopg.connect(_DSN, row_factory=dict_row)
+    # prepare_threshold=None disables server-side prepared statements, which the
+    # Supabase transaction pooler (pgbouncer) rejects — keeps any pooler URI working.
+    return psycopg.connect(_DSN, row_factory=dict_row, prepare_threshold=None)
 
 
 def _iso(v):
