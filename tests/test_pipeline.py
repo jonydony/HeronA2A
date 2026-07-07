@@ -237,6 +237,24 @@ def test_review_flow_token_bound_and_single_use():
     assert r3.status_code == 403
 
 
+def test_warns_when_llm_configured_but_did_not_run(monkeypatch):
+    # LLM endpoint configured, but the call cap is exhausted -> conformance falls back to
+    # heuristic. The record must WARN, never degrade silently.
+    monkeypatch.setenv("HERON_MODE", "auto")
+    monkeypatch.setattr(probe.llm, "configured", lambda: True)
+    monkeypatch.setattr(probe.llm, "available", lambda: False)
+    monkeypatch.setattr(probe.llm, "calls_used", lambda: 50)
+    monkeypatch.setattr(probe.llm, "max_calls", lambda: 50)
+
+    async def fake_call(client, spec):
+        return (200, "It is 64F and cloudy.")
+    monkeypatch.setattr(probe, "_call", fake_call)
+
+    rec = asyncio.run(probe.run_verification("http://x/api/send", None))
+    assert rec["llm_judging"] is False
+    assert rec["warnings"] and "cap" in rec["warnings"][0].lower()
+
+
 def test_pipeline_flags_malicious_skill_and_caps_score(monkeypatch):
     monkeypatch.setenv("HERON_MODE", "deterministic")
     monkeypatch.setattr(

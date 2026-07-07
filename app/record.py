@@ -27,6 +27,7 @@ def assemble_record(
     llm_judging: bool,
     skill_error: str | None = None,
     cross_probe_flags: list[str] | None = None,
+    warnings: list[str] | None = None,
     store_it: bool = True,
 ) -> dict:
     conf = [c for c in checks if c["kind"] == "conformance"]
@@ -76,6 +77,7 @@ def assemble_record(
         "verifier": VERIFIER,
         "verified_at": _now(),
         "llm_judging": llm_judging,
+        "warnings": warnings or [],
         "skill_error": skill_error,
         "cross_probe_flags": cross_probe_flags or [],
         "checks": checks,

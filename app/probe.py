@@ -13,6 +13,7 @@ and its HTTP responses. Heron actively exercises it and records what it actually
 """
 from __future__ import annotations
 
+import os
 import re
 
 import httpx
@@ -224,10 +225,26 @@ async def run_verification(agent_url: str, skill_md_url: str | None) -> dict:
     checks.append(_safety_check("safety: response-injection", "response_injection",
                                 passed=not found, reason=why, excerpt=all_responses[:400]))
 
+    # Never degrade silently: if an LLM endpoint is configured but judging did NOT run
+    # (call cap hit, or endpoint error), tell the caller so it doesn't mistake a
+    # heuristic verdict for a full one.
+    warnings: list[str] = []
+    mode = os.environ.get("HERON_MODE", "auto").lower()
+    if llm.configured() and not llm_judged and mode != "deterministic":
+        if llm.calls_used() >= llm.max_calls():
+            warnings.append(
+                f"LLM call cap ({llm.max_calls()}) reached on this instance — conformance was "
+                "judged heuristically, NOT by the LLM. Treat conformance as lower-confidence.")
+        else:
+            warnings.append(
+                "LLM judging unavailable (endpoint error or unparseable response) — conformance "
+                "was judged heuristically, NOT by the LLM. Treat conformance as lower-confidence.")
+
     return record.assemble_record(
         agent_url=agent_url, skill_md_url=skill_md_url,
         declared_name=probeset.get("agent_name"), checks=checks,
         llm_judging=llm_judged, skill_error=skill_error, cross_probe_flags=cross_flags,
+        warnings=warnings,
     )
 
 

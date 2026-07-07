@@ -10,7 +10,8 @@ https://heronnanda.up.railway.app
 POST /verify
   Probe an agent now and record signed evidence.
   Body: { "agent_url": "https://the-agent/api/send", "skill_md_url": "https://the-agent/skill.md" }
-  Returns: an evidence record { agent_id, summary{score,confidence,...}, checks[], signature }.
+  Returns: an evidence record { agent_id, summary{score,confidence,per_capability}, checks[], llm_judging, warnings[], signature }.
+  Note: if llm_judging is false or warnings is non-empty, conformance was judged heuristically (lower confidence) — do not treat it as a full verification.
   Example:
     curl -X POST https://heronnanda.up.railway.app/verify \
       -H "Content-Type: application/json" \

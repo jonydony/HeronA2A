@@ -22,21 +22,30 @@ import httpx
 
 _BASE = os.environ.get("HERON_LLM_BASE_URL", "").rstrip("/")
 _KEY = os.environ.get("HERON_LLM_API_KEY", "")
-_MODEL = os.environ.get("HERON_LLM_MODEL", "gpt-4o-mini")
+_MODEL = os.environ.get("HERON_LLM_MODEL", "gpt-5.5")
 _MAX_CALLS = int(os.environ.get("HERON_LLM_MAX_CALLS", "50"))
 
 _calls = 0  # per-process counter (resets on redeploy)
+
+
+def configured() -> bool:
+    """An LLM endpoint is set up (key + base URL), regardless of cap/mode."""
+    return bool(_KEY and _BASE)
 
 
 def available() -> bool:
     # HERON_MODE=deterministic forces the keyless path; the call cap also disables it.
     if os.environ.get("HERON_MODE", "auto").lower() == "deterministic":
         return False
-    return bool(_KEY and _BASE) and _calls < _MAX_CALLS
+    return configured() and _calls < _MAX_CALLS
 
 
 def calls_used() -> int:
     return _calls
+
+
+def max_calls() -> int:
+    return _MAX_CALLS
 
 
 def _complete_json(system: str, user: str, max_tokens: int = 2048) -> dict | None:
