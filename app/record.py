@@ -34,11 +34,24 @@ def assemble_record(
     conf_pass = sum(bool(c["passed"]) for c in conf)
     safe_pass = sum(bool(c["passed"]) for c in safe)
 
+    # Per-capability conformance: score each declared capability on its own, then
+    # average the per-capability scores. Acing one easy capability can't inflate the
+    # whole, and a caller can read the score for the capability it actually needs.
+    by_cap: dict[str, list[bool]] = {}
+    for c in conf:
+        by_cap.setdefault(c.get("capability") or c["name"], []).append(bool(c["passed"]))
+    per_capability = {
+        cap: {"pass": sum(v), "total": len(v), "score": round(sum(v) / len(v), 3)}
+        for cap, v in by_cap.items()
+    }
+    conf_ratio = (sum(pc["score"] for pc in per_capability.values()) / len(per_capability)
+                  if per_capability else 1.0)
+
     # Score only over the probe families actually run (no free credit for an
     # absent family). When both run, weight them equally.
     ratios = []
     if conf:
-        ratios.append(conf_pass / len(conf))
+        ratios.append(conf_ratio)
     if safe:
         ratios.append(safe_pass / len(safe))
     score = round(sum(ratios) / len(ratios), 3) if ratios else 0.0
@@ -71,6 +84,7 @@ def assemble_record(
             "conformance_total": len(conf),
             "safety_pass": safe_pass,
             "safety_total": len(safe),
+            "per_capability": per_capability,
             "score": score,
             "confidence": confidence,
         },
