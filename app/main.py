@@ -94,6 +94,7 @@ def health():
         "status": "ok",
         "service": probe.VERIFIER,
         "public_key": sign.public_key_b64(),
+        "backend": store.backend,
         "llm_judging": llm.available(),
         "mode": os.environ.get("HERON_MODE", "auto"),
         "reverify_cadence_days": _REVERIFY_DAYS,
