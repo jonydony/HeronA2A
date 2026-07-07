@@ -13,6 +13,8 @@ from pathlib import Path
 _DATA = Path(__file__).resolve().parent.parent / "data"
 _AGENTS = _DATA / "agents"
 _REGISTRY = _DATA / "registry.json"
+_REVIEWS = _DATA / "reviews"
+_USED = _DATA / "used_tokens.json"
 
 
 def _slug(agent_url: str) -> str:
@@ -67,3 +69,47 @@ def get_entry(aid: str) -> dict | None:
     if not _REGISTRY.exists():
         return None
     return json.loads(_REGISTRY.read_text()).get(aid)
+
+
+# ------------------------------------------------------------------- reviews
+
+def mark_token_used(nonce: str) -> bool:
+    """Burn a token nonce. Returns True if newly used, False if already spent."""
+    _DATA.mkdir(parents=True, exist_ok=True)
+    used = json.loads(_USED.read_text()) if _USED.exists() else []
+    if nonce in used:
+        return False
+    used.append(nonce)
+    _USED.write_text(json.dumps(used))
+    return True
+
+
+def append_review(aid: str, review: dict) -> None:
+    _REVIEWS.mkdir(parents=True, exist_ok=True)
+    path = _REVIEWS / f"{aid}.json"
+    reviews = json.loads(path.read_text()) if path.exists() else []
+    reviews.append(review)
+    path.write_text(json.dumps(reviews, indent=2))
+    _reindex_reviews(aid, reviews)
+
+
+def get_reviews(aid: str) -> list[dict]:
+    path = _REVIEWS / f"{aid}.json"
+    return json.loads(path.read_text()) if path.exists() else []
+
+
+def _reindex_reviews(aid: str, reviews: list[dict]) -> None:
+    # Fold a review summary into the registry entry (kept separate from probe_score).
+    if not _REGISTRY.exists():
+        return
+    registry = json.loads(_REGISTRY.read_text())
+    entry = registry.get(aid)
+    if not entry:
+        return
+    counts = {"worked": 0, "partial": 0, "failed": 0}
+    for r in reviews:
+        if r.get("outcome") in counts:
+            counts[r["outcome"]] += 1
+    entry["reviews"] = {**counts, "total": len(reviews)}
+    registry[aid] = entry
+    _REGISTRY.write_text(json.dumps(registry, indent=2))
