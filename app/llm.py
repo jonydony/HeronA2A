@@ -48,6 +48,23 @@ def max_calls() -> int:
     return _MAX_CALLS
 
 
+def diagnose() -> dict:
+    """Temporary: make one raw call and return status + body so we can see why calls fail."""
+    if not configured():
+        return {"configured": False, "base": _BASE, "model": _MODEL}
+    try:
+        r = httpx.post(
+            f"{_BASE}/chat/completions",
+            headers={"Authorization": f"Bearer {_KEY}", "Content-Type": "application/json"},
+            json={"model": _MODEL, "max_tokens": 50,
+                  "messages": [{"role": "user", "content": 'Reply with only this JSON: {"ok": true}'}]},
+            timeout=30,
+        )
+        return {"model": _MODEL, "http": r.status_code, "body": r.text[:600]}
+    except Exception as e:
+        return {"model": _MODEL, "error": str(e)[:400]}
+
+
 def _complete_json(system: str, user: str, max_tokens: int = 2048) -> dict | None:
     """POST an OpenAI-style chat completion, expect a JSON object back. None on any failure."""
     global _calls

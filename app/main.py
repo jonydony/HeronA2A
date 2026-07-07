@@ -108,6 +108,12 @@ def skill_md():
     return _SKILL_MD.read_text() if _SKILL_MD.exists() else "SKILL.md missing"
 
 
+@app.get("/health/llm")
+def health_llm():
+    """Temporary deploy diagnostic: one raw LLM call, returns status + body."""
+    return llm.diagnose()
+
+
 @app.post("/verify", dependencies=[Depends(_rate_limit)])
 async def verify(req: VerifyRequest):
     record = await probe.run_verification(req.agent_url, req.skill_md_url)
