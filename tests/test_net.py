@@ -6,6 +6,10 @@ exercise the block-path deterministically.
 """
 from __future__ import annotations
 
+import asyncio
+import socket
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -67,3 +71,34 @@ def test_verify_endpoint_rejects_internal_skill_md_url():
                                      "skill_md_url": "http://127.0.0.1/skill.md"})
     assert r.status_code == 400
     assert "skill_md_url" in r.text
+
+
+def test_safe_request_pins_to_resolved_ip(monkeypatch):
+    # DNS-rebinding defence: the request must CONNECT to the exact IP we validated
+    # (URL host rewritten to the IP) while the Host header keeps the real hostname.
+    monkeypatch.setattr(net, "_resolve_public_ips", lambda host, port: ["93.184.216.34"])
+    seen = {}
+
+    def handler(request):
+        seen["conn_host"] = request.url.host
+        seen["host_header"] = request.headers.get("host")
+        return httpx.Response(200, text="ok")
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            return await net.safe_request(c, "GET", "https://example.com/path?q=1")
+
+    status, body = asyncio.run(go())
+    assert status == 200 and body == "ok"
+    assert seen["conn_host"] == "93.184.216.34"   # connected to the pinned IP
+    assert seen["host_header"] == "example.com"    # original Host preserved
+
+
+def test_resolve_fails_closed_on_mixed_public_private(monkeypatch):
+    # split-horizon: if a host resolves to BOTH a public and a private address, refuse.
+    def fake_getaddrinfo(host, port, *a, **k):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))]
+    monkeypatch.setattr(net.socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(net.UnsafeURLError):
+        net.assert_public_url("http://sneaky.example/")

@@ -154,7 +154,7 @@ def review(req: ReviewRequest):
         raise HTTPException(409, "token already used — one review per interaction")
     store.append_review(req.subject_agent_id, {
         "subject_agent_id": req.subject_agent_id, "outcome": req.outcome, "note": req.note,
-        "reviewer": req.reviewer_public_key, "signature": req.signature,
+        "reviewer": req.reviewer_public_key, "signature": req.signature, "nonce": nonce,
         "recorded_at": _now_iso(),
     })
     return {"status": "recorded", "subject_agent_id": req.subject_agent_id,

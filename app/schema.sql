@@ -31,8 +31,14 @@ create table if not exists reviews (
     outcome     text not null,
     note        text not null default '',
     signature   text not null,
+    nonce       text,
     recorded_at timestamptz not null
 );
+
+-- Back-compat for DBs created before the signed nonce was stored (idempotent): the
+-- reviewer signature is over {subject, outcome, note, nonce}, so persisting the nonce
+-- makes a stored review independently re-verifiable in an audit.
+alter table reviews add column if not exists nonce text;
 
 create table if not exists used_tokens (
     nonce   text primary key,

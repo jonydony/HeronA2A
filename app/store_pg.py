@@ -136,10 +136,10 @@ def mark_token_used(nonce: str) -> bool:
 def append_review(aid: str, review: dict) -> None:
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "insert into reviews (agent_id, reviewer, outcome, note, signature, recorded_at) "
-            "values (%s,%s,%s,%s,%s,%s)",
+            "insert into reviews (agent_id, reviewer, outcome, note, signature, nonce, recorded_at) "
+            "values (%s,%s,%s,%s,%s,%s,%s)",
             (aid, review["reviewer"], review["outcome"], review.get("note", ""),
-             review["signature"], review["recorded_at"]),
+             review["signature"], review.get("nonce"), review["recorded_at"]),
         )
         cur.execute(
             """
@@ -157,9 +157,9 @@ def append_review(aid: str, review: dict) -> None:
 
 
 def get_reviews(aid: str) -> list[dict]:
-    # Raw reviewer signatures are stored but NOT published (H2): exposing them lets a
-    # scraper harvest signed tuples. Reviewer identity (public key) stays. (The stored
-    # sig isn't independently re-verifiable — the signed nonce isn't persisted.)
+    # The raw signature + its bound nonce are stored (so a review is independently
+    # re-verifiable in an audit) but NOT published (H2): exposing the signed tuple lets
+    # a scraper harvest it. Reviewer identity (public key) stays public.
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "select reviewer, outcome, note, recorded_at from reviews "

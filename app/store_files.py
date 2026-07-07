@@ -88,12 +88,12 @@ def append_review(aid: str, review: dict) -> None:
 
 
 def get_reviews(aid: str) -> list[dict]:
-    # Keep the raw signature on disk, but strip it from what we publish (H2): don't
-    # hand scrapers reusable signed tuples. Reviewer public key stays. (Note: the
-    # stored sig isn't independently re-verifiable — the signed nonce isn't persisted.)
+    # Keep the raw signature + its bound nonce on disk (so a review is independently
+    # re-verifiable in an audit), but strip BOTH from what we publish (H2): don't hand
+    # scrapers a reusable signed tuple. Reviewer public key stays public.
     path = _REVIEWS / f"{aid}.json"
     reviews = json.loads(path.read_text()) if path.exists() else []
-    return [{k: v for k, v in r.items() if k != "signature"} for r in reviews]
+    return [{k: v for k, v in r.items() if k not in ("signature", "nonce")} for r in reviews]
 
 
 def _reindex_reviews(aid: str, reviews: list[dict]) -> None:

@@ -19,7 +19,13 @@ def test_schema_parses_into_four_idempotent_tables():
 
 
 def test_schema_has_no_stray_comment_statements():
-    # every statement must be real DDL, not a swallowed comment block
+    # every statement must be real DDL (create/alter), not a swallowed comment block
     for s in store_pg._SCHEMA_STMTS:
         assert not s.lstrip().startswith("--")
-        assert "create" in s.lower()
+        assert s.lower().startswith(("create", "alter"))
+
+
+def test_reviews_nonce_column_is_provisioned():
+    # the signed nonce must be persisted (fresh via CREATE, existing via idempotent ALTER)
+    joined = " ".join(store_pg._SCHEMA_STMTS).lower()
+    assert "alter table reviews add column if not exists nonce" in joined

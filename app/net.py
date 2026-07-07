@@ -11,20 +11,21 @@ Defence, layered:
   2. host resolution check    resolve the hostname and refuse if ANY resolved
                               address is private / loopback / link-local / reserved /
                               multicast / unspecified (blocks metadata + internal)
-  3. no blind redirects       callers pass follow_redirects=False; a 302 to an
-                              internal host would otherwise bypass the host check
-  4. body cap                 reads are byte-capped so a huge internal response
-                              can't be used for memory abuse or bulk exfil
-
-Residual (documented, accepted for this demo artifact): DNS rebinding between the
-check and the connect (TOCTOU). Closing it fully needs pinning the socket to the
-validated IP; out of scope here.
+  3. IP pinning               safe_request resolves ONCE, validates, then connects to
+                              that exact IP (URL host rewritten to the IP, Host header
+                              + TLS SNI preserved). httpx never re-resolves, so a
+                              low-TTL rebinding record can't swap in an internal IP
+                              between the check and the connect (closes the TOCTOU).
+  4. no blind redirects       a 302 to an internal host is not followed (it would be a
+                              fresh, unvalidated hop)
+  5. body cap                 reads are byte-capped so a huge internal response can't
+                              be used for memory abuse or bulk exfil
 """
 from __future__ import annotations
 
 import ipaddress
 import socket
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -57,8 +58,9 @@ def _ip_is_blocked(ip: str) -> bool:
     )
 
 
-def assert_public_url(url: str | None) -> None:
-    """Raise UnsafeURLError unless `url` is http(s) and every resolved IP is public."""
+def _split_host_port(url: str | None) -> tuple[str, str, int]:
+    """Parse + validate the shape of a URL. Returns (scheme, host, port). Only ever
+    raises UnsafeURLError (never a bare ValueError), so callers get a clean 400."""
     if not url or not isinstance(url, str):
         raise UnsafeURLError("missing or non-string URL")
     parts = urlsplit(url)
@@ -67,23 +69,40 @@ def assert_public_url(url: str | None) -> None:
     host = parts.hostname
     if not host:
         raise UnsafeURLError("URL has no host")
-    # .port raises ValueError on an out-of-range/garbage port; normalize it to
-    # UnsafeURLError so the /verify gate returns a clean 400, never a 500.
     try:
         port = parts.port or (443 if parts.scheme == "https" else 80)
     except ValueError as exc:
         raise UnsafeURLError(f"invalid port in URL ({exc})") from exc
-    # A literal IP still has to pass the range check.
+    return parts.scheme, host, port
+
+
+def _resolve_public_ips(host: str, port: int) -> list[str]:
+    """Resolve `host` and return its addresses, or raise UnsafeURLError if ANY resolved
+    address is non-public (fail closed on a split-horizon / mixed result)."""
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise UnsafeURLError(f"host does not resolve: {host} ({exc})") from exc
-    ips = {info[4][0] for info in infos}
+    ips = list(dict.fromkeys(info[4][0] for info in infos))  # de-dup, keep order
     if not ips:
         raise UnsafeURLError(f"host resolves to no address: {host}")
     for ip in ips:
         if _ip_is_blocked(ip):
             raise UnsafeURLError(f"host {host} resolves to a non-public address ({ip})")
+    return ips
+
+
+def assert_public_url(url: str | None) -> None:
+    """Raise UnsafeURLError unless `url` is http(s) and every resolved IP is public.
+    Used as the up-front /verify gate; safe_request re-validates AND pins at fetch time."""
+    scheme, host, port = _split_host_port(url)
+    _resolve_public_ips(host, port)
+
+
+def _authority(host: str, port: int, scheme: str) -> str:
+    h = f"[{host}]" if ":" in host else host
+    default = 443 if scheme == "https" else 80
+    return h if port == default else f"{h}:{port}"
 
 
 async def safe_request(
@@ -96,10 +115,27 @@ async def safe_request(
     headers=None,
     max_bytes: int = MAX_BODY_BYTES,
 ) -> tuple[int, str]:
-    """Guarded outbound call. Validates the URL, refuses redirects, byte-caps the body.
-    Returns (status_code, text). Raises UnsafeURLError for a blocked URL."""
-    assert_public_url(url)
-    req = client.build_request(method.upper(), url, params=params, json=json, headers=headers)
+    """Guarded outbound call. Resolves + validates the host ONCE, then connects to that
+    exact IP (no re-resolution -> no DNS rebinding), refuses redirects, byte-caps the
+    body. Returns (status_code, text). Raises UnsafeURLError for a blocked URL."""
+    scheme, host, port = _split_host_port(url)
+    pin_ip = _resolve_public_ips(host, port)[0]
+
+    # Rebuild the URL against the pinned IP so httpx connects there and never resolves
+    # the hostname again. Preserve the original Host header and drive TLS SNI + cert
+    # verification with the real hostname via the sni_hostname extension.
+    parts = urlsplit(url)
+    ip_netloc = f"[{pin_ip}]" if ":" in pin_ip else pin_ip
+    if parts.port:
+        ip_netloc += f":{port}"
+    pinned_url = urlunsplit((scheme, ip_netloc, parts.path or "/", parts.query, ""))
+
+    hdrs = dict(headers or {})
+    hdrs["Host"] = _authority(host, port, scheme)
+    req = client.build_request(
+        method.upper(), pinned_url, params=params, json=json, headers=hdrs,
+        extensions={"sni_hostname": host},
+    )
     r = await client.send(req, follow_redirects=False)
     try:
         if r.is_redirect:

@@ -247,9 +247,16 @@ def test_review_flow_token_bound_and_single_use():
                      "signature": scraped_sig})
     assert r4.status_code == 403, "replay of a scraped review must be rejected"
 
-    # public reads must not leak raw reviewer signatures (H2)
+    # public reads must not leak the raw signed tuple (signature OR its nonce) (H2)
     ev = client.get(f"/agent/{aid}/evidence").json()
-    assert ev["reviews"] and all("signature" not in rv for rv in ev["reviews"])
+    assert ev["reviews"]
+    assert all("signature" not in rv and "nonce" not in rv for rv in ev["reviews"])
+
+    # but the PERSISTED review stays independently re-verifiable from sig + stored nonce
+    raw = _json.loads((store_files._REVIEWS / f"{aid}.json").read_text())[0]
+    vbody = {"subject_agent_id": aid, "outcome": raw["outcome"],
+             "note": raw["note"], "nonce": raw["nonce"]}
+    assert sign.verify(vbody, raw["signature"], raw["reviewer"])
 
 
 def test_review_bad_signature_does_not_burn_token(monkeypatch, tmp_path):
