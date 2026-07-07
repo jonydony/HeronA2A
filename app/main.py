@@ -107,28 +107,6 @@ def skill_md():
     return _SKILL_MD.read_text() if _SKILL_MD.exists() else "SKILL.md missing"
 
 
-@app.get("/health/db")
-def health_db():
-    """Temporary deploy diagnostic: try a DB connection, return the exact error."""
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        return {"backend": "files", "db": "DATABASE_URL not set"}
-    host = dsn.split("@")[-1] if "@" in dsn else "?"  # host:port/db, no credentials
-    import re
-    m = re.match(r"postgres(?:ql)?://([^:]+):([^@]*)@", dsn)
-    live_user = m.group(1) if m else "?"
-    pw_len = len(m.group(2)) if m else 0  # length only, never the value
-    try:
-        import psycopg
-        with psycopg.connect(dsn, connect_timeout=8, prepare_threshold=None) as conn, conn.cursor() as cur:
-            cur.execute("select 1")
-            cur.fetchone()
-        return {"backend": "postgres", "db": "ok", "host": host, "user": live_user, "pw_len": pw_len}
-    except Exception as e:
-        return {"backend": "postgres", "db": "error", "host": host, "user": live_user,
-                "pw_len": pw_len, "detail": str(e)[:300]}
-
-
 @app.post("/verify", dependencies=[Depends(_rate_limit)])
 async def verify(req: VerifyRequest):
     record = await probe.run_verification(req.agent_url, req.skill_md_url)

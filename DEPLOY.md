@@ -42,6 +42,16 @@ This becomes `HERON_SIGNING_KEY`. If you skip it, Heron generates a throwaway ke
    - **List39** (agent facts registry) if used.
 3. Flip the GitHub repo to **public** when ready to submit.
 
+## DATABASE_URL gotchas (all three bit us once)
+
+The Supabase connection string must be exactly right or the app 500s on any DB call. Verify at `GET /health` → `"backend":"postgres"`, then `GET /register` (should be 200, not 500). Three things:
+
+1. **Use the pooler host, not direct.** `db.<ref>.supabase.co` is IPv6-only — Railway can't reach it. Use the **Session pooler**: `aws-<n>-<region>.pooler.supabase.com`.
+2. **Username must carry the project ref:** `postgres.<project_ref>`, not bare `postgres`. Bare `postgres` on the pooler → `password authentication failed`.
+3. **Percent-encode special characters in the password.** e.g. `,`→`%2C`, `$`→`%24`, `!`→`%21`. An un-encoded special char silently truncates/mangles the password → auth fails.
+
+Copy the Session-pooler URI verbatim from Supabase → Connect (it has #1 and #2 right), then only encode the password (#3).
+
 ## Notes
 
 - No `DATABASE_URL` → Heron falls back to the local file store (fine for dev/tests, not for a redeployable server).
