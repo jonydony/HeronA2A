@@ -26,6 +26,8 @@ from app import main, net
     "gopher://127.0.0.1:6379/",       # scheme not allowed
     "http://",                        # no host
     "not a url",
+    "http://8.8.8.8:999999/",         # port out of range -> UnsafeURLError, not 500
+    "http://8.8.8.8:notaport/",       # non-numeric port
 ])
 def test_assert_public_url_blocks_unsafe(url):
     with pytest.raises(net.UnsafeURLError):
@@ -51,6 +53,12 @@ def test_verify_endpoint_rejects_internal_agent_url():
     r = client.post("/verify", json={"agent_url": "http://169.254.169.254/latest/meta-data/"})
     assert r.status_code == 400
     assert "rejected" in r.text.lower()
+
+
+def test_verify_endpoint_returns_400_not_500_on_bad_port():
+    client = TestClient(main.app)
+    r = client.post("/verify", json={"agent_url": "http://8.8.8.8:999999/"})
+    assert r.status_code == 400, r.text
 
 
 def test_verify_endpoint_rejects_internal_skill_md_url():

@@ -157,8 +157,9 @@ def append_review(aid: str, review: dict) -> None:
 
 
 def get_reviews(aid: str) -> list[dict]:
-    # Raw reviewer signatures are stored for audit but NOT published (H2): exposing
-    # them lets a scraper harvest signed tuples. Reviewer identity (public key) stays.
+    # Raw reviewer signatures are stored but NOT published (H2): exposing them lets a
+    # scraper harvest signed tuples. Reviewer identity (public key) stays. (The stored
+    # sig isn't independently re-verifiable — the signed nonce isn't persisted.)
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "select reviewer, outcome, note, recorded_at from reviews "

@@ -38,7 +38,12 @@ class UnsafeURLError(ValueError):
 
 
 def _ip_is_blocked(ip: str) -> bool:
-    addr = ipaddress.ip_address(ip)
+    try:
+        # getaddrinfo can hand back a scoped address (fe80::1%eth0); ip_address would
+        # raise on that. Treat anything unparseable as blocked (fail closed).
+        addr = ipaddress.ip_address(ip.split("%", 1)[0])
+    except ValueError:
+        return True
     # IPv4-mapped IPv6 (::ffff:127.0.0.1) must be judged on the embedded v4 addr.
     if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
         addr = addr.ipv4_mapped
@@ -62,10 +67,15 @@ def assert_public_url(url: str | None) -> None:
     host = parts.hostname
     if not host:
         raise UnsafeURLError("URL has no host")
+    # .port raises ValueError on an out-of-range/garbage port; normalize it to
+    # UnsafeURLError so the /verify gate returns a clean 400, never a 500.
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError as exc:
+        raise UnsafeURLError(f"invalid port in URL ({exc})") from exc
     # A literal IP still has to pass the range check.
     try:
-        infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80),
-                                   proto=socket.IPPROTO_TCP)
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise UnsafeURLError(f"host does not resolve: {host} ({exc})") from exc
     ips = {info[4][0] for info in infos}
