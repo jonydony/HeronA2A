@@ -96,6 +96,7 @@ def health():
         "public_key": sign.public_key_b64(),
         "backend": store.backend,
         "llm_judging": llm.available(),
+        "llm_calls_used": llm.calls_used(),
         "mode": os.environ.get("HERON_MODE", "auto"),
         "reverify_cadence_days": _REVERIFY_DAYS,
         "rate_limit_per_hour": _LIMIT,

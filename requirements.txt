@@ -1,5 +1,4 @@
 # Heron Probe — pinned runtime deps
-anthropic==0.116.0
 cryptography==49.0.0
 fastapi==0.139.0
 httpx==0.28.1
