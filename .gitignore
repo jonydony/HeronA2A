@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/heron_ed25519.key
+data/agents/
+data/registry.json
