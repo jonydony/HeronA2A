@@ -322,6 +322,25 @@ def test_warns_when_llm_configured_but_did_not_run(monkeypatch):
     assert rec["warnings"] and "cap" in rec["warnings"][0].lower()
 
 
+def test_trust_score_is_best_of_recent_not_last():
+    # M10: an unsolicited low run must not tank the public headline. trust_score = best
+    # of the last N; latest_score keeps the literal last run for transparency.
+    url = "http://agent.example/api/send"
+
+    def rec(score, ts):
+        return {"agent_id": store_files.agent_id(url), "agent_url": url,
+                "declared_name": "A", "verified_at": ts,
+                "summary": {"score": score, "confidence": 0.5}}
+
+    store_files.append_evidence(rec(0.9, "2026-01-01T00:00:00+00:00"))
+    store_files.append_evidence(rec(0.3, "2026-01-02T00:00:00+00:00"))  # hostile low run
+
+    e = store_files.get_entry(store_files.agent_id(url))
+    assert e["latest_score"] == 0.3    # literal last run preserved
+    assert e["trust_score"] == 0.9     # headline unaffected by the hostile run
+    assert store_files.get_registry()[0]["trust_score"] == 0.9
+
+
 def test_pipeline_flags_malicious_skill_and_caps_score(monkeypatch):
     monkeypatch.setenv("HERON_MODE", "deterministic")
     monkeypatch.setattr(

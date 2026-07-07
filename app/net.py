@@ -99,6 +99,18 @@ def assert_public_url(url: str | None) -> None:
     _resolve_public_ips(host, port)
 
 
+def same_origin(a: str | None, b: str | None) -> bool:
+    """True iff two URLs share scheme + host + port (default ports normalized). Used to
+    keep the skill card bound to the agent (M10): a caller can't hand us a mismatched or
+    malicious SKILL.md hosted somewhere other than the agent it claims to describe."""
+    try:
+        sa, ha, pa = _split_host_port(a)
+        sb, hb, pb = _split_host_port(b)
+    except UnsafeURLError:
+        return False
+    return sa == sb and ha.lower() == hb.lower() and pa == pb
+
+
 def _authority(host: str, port: int, scheme: str) -> str:
     h = f"[{host}]" if ":" in host else host
     default = 443 if scheme == "https" else 80

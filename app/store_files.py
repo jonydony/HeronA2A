@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 _DATA = Path(__file__).resolve().parent.parent / "data"
@@ -17,9 +18,22 @@ _REGISTRY = _DATA / "registry.json"
 _REVIEWS = _DATA / "reviews"
 _USED = _DATA / "used_tokens.json"
 
+# M10: the public headline score is the best of the last N runs, so one hostile,
+# unsolicited low run can't tank an agent's registry score. Full history is untouched.
+_TRUST_WINDOW = int(os.environ.get("HERON_TRUST_WINDOW", "5"))
+
 
 def agent_id(agent_url: str) -> str:
     return hashlib.sha256(agent_url.encode("utf-8")).hexdigest()[:16]
+
+
+def _trust_score(aid: str) -> float | None:
+    scores = [r["summary"]["score"] for r in get_timeline(aid)][-_TRUST_WINDOW:]
+    return max(scores) if scores else None
+
+
+def _with_trust(entry: dict) -> dict:
+    return {**entry, "trust_score": _trust_score(entry["agent_id"])}
 
 
 def append_evidence(record: dict) -> None:
@@ -59,13 +73,15 @@ def get_registry() -> list[dict]:
     if not _REGISTRY.exists():
         return []
     registry = json.loads(_REGISTRY.read_text())
-    return sorted(registry.values(), key=lambda r: r["last_verified_at"], reverse=True)
+    ordered = sorted(registry.values(), key=lambda r: r["last_verified_at"], reverse=True)
+    return [_with_trust(e) for e in ordered]
 
 
 def get_entry(aid: str) -> dict | None:
     if not _REGISTRY.exists():
         return None
-    return json.loads(_REGISTRY.read_text()).get(aid)
+    entry = json.loads(_REGISTRY.read_text()).get(aid)
+    return _with_trust(entry) if entry else None
 
 
 def mark_token_used(nonce: str) -> bool:

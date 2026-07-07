@@ -17,6 +17,18 @@ from psycopg.types.json import Jsonb
 
 _DSN = os.environ.get("DATABASE_URL", "")
 
+# M10: public headline score = best of the last N runs, so one hostile low run can't
+# tank an agent's registry score. Computed at read time; full history is untouched.
+_TRUST_WINDOW = int(os.environ.get("HERON_TRUST_WINDOW", "5"))
+
+# Best score among an agent's most recent N evidence records, as a scalar subquery.
+_TRUST_SUBQUERY = """(
+    select max((e.record->'summary'->>'score')::numeric) from (
+        select record from evidence where agent_id = a.agent_id
+        order by verified_at desc, id desc limit %s
+    ) e
+) as trust_score"""
+
 # H4: ship the schema in-repo and apply it once per process on first connect, so a
 # fresh database bootstraps itself. Statements are IF-NOT-EXISTS, so on the live DB
 # this is a harmless no-op. Split + run individually to stay pooler-friendly.
@@ -107,6 +119,8 @@ def _entry(row: dict) -> dict:
         "name": row["name"],
         "latest_score": float(row["latest_score"]) if row["latest_score"] is not None else None,
         "latest_confidence": float(row["latest_confidence"]) if row["latest_confidence"] is not None else None,
+        "trust_score": float(row["trust_score"]) if row.get("trust_score") is not None
+                       else (float(row["latest_score"]) if row["latest_score"] is not None else None),
         "last_verified_at": _iso(row["last_verified_at"]),
         "first_verified_at": _iso(row["first_verified_at"]),
         "verification_count": row["verification_count"],
@@ -116,13 +130,15 @@ def _entry(row: dict) -> dict:
 
 def get_registry() -> list[dict]:
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute("select * from agents order by last_verified_at desc")
+        cur.execute(f"select a.*, {_TRUST_SUBQUERY} from agents a order by a.last_verified_at desc",
+                    (_TRUST_WINDOW,))
         return [_entry(r) for r in cur.fetchall()]
 
 
 def get_entry(aid: str) -> dict | None:
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute("select * from agents where agent_id=%s", (aid,))
+        cur.execute(f"select a.*, {_TRUST_SUBQUERY} from agents a where a.agent_id=%s",
+                    (_TRUST_WINDOW, aid))
         row = cur.fetchone()
         return _entry(row) if row else None
 

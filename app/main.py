@@ -80,7 +80,7 @@ def index():
             "POST /review": "token-bound, signed peer review of an agent you probed through us",
             "POST /reverify/{id}": "re-probe a known agent (explicit, on request)",
             "POST /reverify-all": "RESERVED / disabled (no unprompted mass re-probing)",
-            "GET /register": "all verified agents + latest score + freshness",
+            "GET /register": "all verified agents + trust score (best of recent runs) + latest run + freshness",
             "GET /agent/{id}/evidence": "full signed evidence timeline for one agent",
             "GET /skill.md": "how an agent calls Heron",
             "GET /health": "liveness + signing public key",
@@ -124,6 +124,10 @@ async def verify(req: VerifyRequest):
                 net.assert_public_url(url)
             except net.UnsafeURLError as exc:
                 raise HTTPException(400, f"{label} rejected: {exc}")
+    # M10: the skill card must live on the agent's own origin, so a caller can't tank a
+    # competitor's score by pointing us at a mismatched / malicious SKILL.md.
+    if req.skill_md_url and not net.same_origin(req.agent_url, req.skill_md_url):
+        raise HTTPException(400, "skill_md_url must be same-origin as agent_url")
     record = await probe.run_verification(req.agent_url, req.skill_md_url)
     # Hand the caller a single-use interaction token so it can leave one review later.
     token = tokens.issue(record["agent_id"])

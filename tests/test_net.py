@@ -59,6 +59,28 @@ def test_verify_endpoint_rejects_internal_agent_url():
     assert "rejected" in r.text.lower()
 
 
+@pytest.mark.parametrize("a,b,expected", [
+    ("https://agent.example/api", "https://agent.example/skill.md", True),
+    ("https://agent.example:443/api", "https://agent.example/skill.md", True),  # default port
+    ("https://Agent.Example/api", "https://agent.example/skill.md", True),      # case-insensitive host
+    ("https://agent.example/api", "https://evil.example/skill.md", False),      # different host
+    ("https://agent.example/api", "http://agent.example/skill.md", False),      # different scheme
+    ("https://agent.example/api", "https://agent.example:8443/skill.md", False),# different port
+])
+def test_same_origin(a, b, expected):
+    assert net.same_origin(a, b) is expected
+
+
+def test_verify_endpoint_rejects_cross_origin_skill_md(monkeypatch):
+    # M10: a caller can't point us at a competitor's agent with a malicious skill card
+    # hosted elsewhere.
+    client = TestClient(main.app)
+    r = client.post("/verify", json={"agent_url": "http://8.8.8.8/api/send",
+                                     "skill_md_url": "http://8.8.4.4/skill.md"})
+    assert r.status_code == 400
+    assert "same-origin" in r.text
+
+
 def test_verify_endpoint_returns_400_not_500_on_bad_port():
     client = TestClient(main.app)
     r = client.post("/verify", json={"agent_url": "http://8.8.8.8:999999/"})
