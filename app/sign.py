@@ -26,7 +26,16 @@ def _load_or_create_key() -> Ed25519PrivateKey:
     # else a persisted file; else generate (dev).
     env_key = os.environ.get("HERON_SIGNING_KEY")
     if env_key:
-        return Ed25519PrivateKey.from_private_bytes(base64.b64decode(env_key))
+        # L11: fail with a clear, actionable message instead of an opaque base64/crypto
+        # traceback if the operator set a malformed key. We do NOT silently fall back —
+        # a wrong signing identity must be fixed, not papered over.
+        try:
+            return Ed25519PrivateKey.from_private_bytes(base64.b64decode(env_key))
+        except Exception as exc:
+            raise RuntimeError(
+                "HERON_SIGNING_KEY is set but invalid — it must be base64 of a 32-byte "
+                f"ed25519 seed (see sign.private_seed_b64). Fix or unset it. Cause: {exc}"
+            ) from exc
     if _KEY_PATH.exists():
         return serialization.load_pem_private_key(_KEY_PATH.read_bytes(), password=None)  # type: ignore[return-value]
     key = Ed25519PrivateKey.generate()

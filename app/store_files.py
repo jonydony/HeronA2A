@@ -88,8 +88,11 @@ def append_review(aid: str, review: dict) -> None:
 
 
 def get_reviews(aid: str) -> list[dict]:
+    # Store the raw signature on disk for audit, but strip it from what we publish
+    # (H2): don't hand scrapers reusable signed tuples. Reviewer public key stays.
     path = _REVIEWS / f"{aid}.json"
-    return json.loads(path.read_text()) if path.exists() else []
+    reviews = json.loads(path.read_text()) if path.exists() else []
+    return [{k: v for k, v in r.items() if k != "signature"} for r in reviews]
 
 
 def _reindex_reviews(aid: str, reviews: list[dict]) -> None:

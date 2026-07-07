@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from . import llm, probe, sign, store, tokens
+from . import llm, net, probe, sign, store, tokens
 
 app = FastAPI(title="Heron Probe", version="0.1")
 _SKILL_MD = Path(__file__).resolve().parent.parent / "SKILL.md"
@@ -63,7 +63,7 @@ class ReviewRequest(BaseModel):
     reviewer_public_key: str    # base64 ed25519 — the reviewer's stable identity
     outcome: str                # worked | partial | failed
     note: str = ""
-    signature: str              # reviewer sig over {subject_agent_id, outcome, note}
+    signature: str              # reviewer sig over {subject_agent_id, outcome, note, nonce}
 
 
 def _now_iso() -> str:
@@ -116,6 +116,14 @@ def health_llm():
 
 @app.post("/verify", dependencies=[Depends(_rate_limit)])
 async def verify(req: VerifyRequest):
+    # SSRF gate up front: reject internal/metadata targets with a clear 400 instead of
+    # producing a record whose probe bodies reflect an internal service's response.
+    for label, url in (("agent_url", req.agent_url), ("skill_md_url", req.skill_md_url)):
+        if url:
+            try:
+                net.assert_public_url(url)
+            except net.UnsafeURLError as exc:
+                raise HTTPException(400, f"{label} rejected: {exc}")
     record = await probe.run_verification(req.agent_url, req.skill_md_url)
     # Hand the caller a single-use interaction token so it can leave one review later.
     token = tokens.issue(record["agent_id"])
@@ -133,14 +141,21 @@ def review(req: ReviewRequest):
     ok, info = tokens.verify(req.token, req.subject_agent_id)
     if not ok:
         raise HTTPException(403, f"invalid interaction token: {info}")
-    if not store.mark_token_used(info):  # info == nonce on success
-        raise HTTPException(409, "token already used — one review per interaction")
-    body = {"subject_agent_id": req.subject_agent_id, "outcome": req.outcome, "note": req.note}
+    nonce = info  # info == nonce on success
+    # H2: bind the reviewer signature to this token's nonce, so a scraped signed
+    # review can't be replayed against a different (fresh) token.
+    body = {"subject_agent_id": req.subject_agent_id, "outcome": req.outcome,
+            "note": req.note, "nonce": nonce}
+    # M6: verify the reviewer signature BEFORE burning the nonce, so a bad signature
+    # can't spend a legitimate single-use token.
     if not sign.verify(body, req.signature, req.reviewer_public_key):
         raise HTTPException(403, "reviewer signature does not verify over the review body")
+    if not store.mark_token_used(nonce):
+        raise HTTPException(409, "token already used — one review per interaction")
     store.append_review(req.subject_agent_id, {
-        **body, "reviewer": req.reviewer_public_key,
-        "signature": req.signature, "recorded_at": _now_iso(),
+        "subject_agent_id": req.subject_agent_id, "outcome": req.outcome, "note": req.note,
+        "reviewer": req.reviewer_public_key, "signature": req.signature,
+        "recorded_at": _now_iso(),
     })
     return {"status": "recorded", "subject_agent_id": req.subject_agent_id,
             "reviews": (store.get_entry(req.subject_agent_id) or {}).get("reviews")}

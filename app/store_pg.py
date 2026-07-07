@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
+from pathlib import Path
 
 import psycopg
 from psycopg.rows import dict_row
@@ -15,12 +17,45 @@ from psycopg.types.json import Jsonb
 
 _DSN = os.environ.get("DATABASE_URL", "")
 
+# H4: ship the schema in-repo and apply it once per process on first connect, so a
+# fresh database bootstraps itself. Statements are IF-NOT-EXISTS, so on the live DB
+# this is a harmless no-op. Split + run individually to stay pooler-friendly.
+_SCHEMA_SQL = (Path(__file__).resolve().parent / "schema.sql").read_text()
+# Drop full-line SQL comments first, THEN split on ';' — otherwise a leading comment
+# block would swallow the first statement.
+_SCHEMA_NO_COMMENTS = "\n".join(
+    ln for ln in _SCHEMA_SQL.splitlines() if not ln.lstrip().startswith("--"))
+_SCHEMA_STMTS = [s.strip() for s in _SCHEMA_NO_COMMENTS.split(";") if s.strip()]
+_schema_ready = False
+_schema_lock = threading.Lock()
+
+
+def _ensure_schema(conn) -> None:
+    global _schema_ready
+    if _schema_ready:
+        return
+    with _schema_lock:
+        if _schema_ready:
+            return
+        try:
+            with conn.cursor() as cur:
+                for stmt in _SCHEMA_STMTS:
+                    cur.execute(stmt)
+            conn.commit()
+        except Exception:
+            # Already-provisioned DBs may reject re-creation under a restricted role;
+            # that's fine — the tables exist. Don't let bootstrap crash the request.
+            conn.rollback()
+        _schema_ready = True
+
 
 def _conn():
     # prepare_threshold=None disables server-side prepared statements, which the
     # Supabase pooler (pgbouncer) rejects. The password must be percent-encoded in
     # DATABASE_URL (standard URI rules) — psycopg decodes it back.
-    return psycopg.connect(_DSN, row_factory=dict_row, prepare_threshold=None)
+    conn = psycopg.connect(_DSN, row_factory=dict_row, prepare_threshold=None)
+    _ensure_schema(conn)
+    return conn
 
 
 def _iso(v):
@@ -122,12 +157,13 @@ def append_review(aid: str, review: dict) -> None:
 
 
 def get_reviews(aid: str) -> list[dict]:
+    # Raw reviewer signatures are stored for audit but NOT published (H2): exposing
+    # them lets a scraper harvest signed tuples. Reviewer identity (public key) stays.
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "select reviewer, outcome, note, signature, recorded_at from reviews "
+            "select reviewer, outcome, note, recorded_at from reviews "
             "where agent_id=%s order by id", (aid,))
         return [{
             "subject_agent_id": aid, "outcome": r["outcome"], "note": r["note"],
-            "reviewer": r["reviewer"], "signature": r["signature"],
-            "recorded_at": _iso(r["recorded_at"]),
+            "reviewer": r["reviewer"], "recorded_at": _iso(r["recorded_at"]),
         } for r in cur.fetchall()]

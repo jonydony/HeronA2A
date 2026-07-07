@@ -13,12 +13,13 @@ and its HTTP responses. Heron actively exercises it and records what it actually
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 
 import httpx
 
-from . import llm, record
+from . import llm, net, record
 from .record import VERIFIER  # re-exported for main.py
 
 _CANARY = "HERON_CANARY_PWNED"
@@ -62,10 +63,13 @@ MAX_PROBES = 6
 # --------------------------------------------------------------- SKILL.md fetch
 
 async def fetch_skill_md(url: str, timeout: float = 20.0) -> str:
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
-        r = await c.get(url)
-        r.raise_for_status()
-        return r.text
+    # SSRF-guarded: net.safe_request validates the URL (public host, http/https),
+    # refuses redirects, and byte-caps the body before we ever read it.
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as c:
+        status, text = await net.safe_request(c, "GET", url)
+        if status == 0 or status >= 400:
+            raise RuntimeError(f"SKILL.md fetch failed (status {status}): {text[:120]}")
+        return text
 
 
 def _declared_line(skill_md: str) -> str:
@@ -111,12 +115,12 @@ async def _call(client: httpx.AsyncClient, spec: dict) -> tuple[int, str]:
     method = (spec.get("method") or "GET").upper()
     url = spec.get("url")
     try:
-        if method == "GET":
-            r = await client.get(url, params=spec.get("params"), headers=spec.get("headers"))
-        else:
-            r = await client.request(method, url, params=spec.get("params"),
-                                     json=spec.get("json"), headers=spec.get("headers"))
-        return r.status_code, r.text[:600]
+        # SSRF-guarded call: an LLM-planned probe can carry ANY url, so every hop
+        # goes through net.safe_request (public-host check + no redirects + byte cap).
+        status, body = await net.safe_request(
+            client, method, url, params=spec.get("params"),
+            json=spec.get("json") if method != "GET" else None, headers=spec.get("headers"))
+        return status, body[:600]
     except Exception as exc:
         return 0, f"error: {exc}"
 
@@ -164,12 +168,16 @@ async def run_verification(agent_url: str, skill_md_url: str | None) -> dict:
         except Exception as exc:
             skill_error = f"could not fetch SKILL.md: {exc}"
 
-    probeset = (llm.plan_probes(skill_md, agent_url, cap=MAX_PROBES) if (llm.available() and skill_md) else None) \
-        or _deterministic_probes(agent_url, skill_md)
+    # H3: llm.* make blocking httpx calls (up to ~90s each). Offload to a worker
+    # thread so a single /verify can't stall the whole async event loop.
+    probeset = None
+    if llm.available() and skill_md:
+        probeset = await asyncio.to_thread(llm.plan_probes, skill_md, agent_url, MAX_PROBES)
+    probeset = probeset or _deterministic_probes(agent_url, skill_md)
     probes = probeset["probes"][:MAX_PROBES]
 
     # 3. run every probe
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
         for p in probes:
             status, resp = await _call(client, p.get("call", {}))
             p["status"], p["response"] = status, resp
@@ -180,7 +188,8 @@ async def run_verification(agent_url: str, skill_md_url: str | None) -> dict:
     verdict_by_name: dict[str, dict] = {}
     cross_flags: list[str] = []
     if llm.available():
-        judged = llm.judge_probes(probeset.get("agent_name", agent_url), declared, probes)
+        judged = await asyncio.to_thread(
+            llm.judge_probes, probeset.get("agent_name", agent_url), declared, probes)
         if judged:
             llm_judged = True
             verdict_by_name = {v["name"]: v for v in judged.get("verdicts", [])}

@@ -212,22 +212,24 @@ def test_review_flow_token_bound_and_single_use():
     pub = base64.b64encode(rk.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
 
-    def signed(outcome, note, aid=aid):
-        body = {"subject_agent_id": aid, "outcome": outcome, "note": note}
+    def signed(outcome, note, nonce, aid=aid):
+        # reviewer sig is now bound to the token nonce (H2)
+        body = {"subject_agent_id": aid, "outcome": outcome, "note": note, "nonce": nonce}
         canon = _json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
         return base64.b64encode(rk.sign(canon)).decode()
 
     tok = tokens.issue(aid)
+    n = tok["payload"]["nonce"]
     r = client.post("/review", json={"subject_agent_id": aid, "token": tok,
                     "reviewer_public_key": pub, "outcome": "worked", "note": "solid",
-                    "signature": signed("worked", "solid")})
+                    "signature": signed("worked", "solid", n)})
     assert r.status_code == 200, r.text
     assert r.json()["reviews"]["worked"] == 1
 
     # same token again -> single-use rejection
     r2 = client.post("/review", json={"subject_agent_id": aid, "token": tok,
                      "reviewer_public_key": pub, "outcome": "worked", "note": "solid",
-                     "signature": signed("worked", "solid")})
+                     "signature": signed("worked", "solid", n)})
     assert r2.status_code == 409
 
     # fresh token but bad reviewer signature -> rejected
@@ -235,6 +237,64 @@ def test_review_flow_token_bound_and_single_use():
                      "reviewer_public_key": pub, "outcome": "worked", "note": "solid",
                      "signature": "AAAA"})
     assert r3.status_code == 403
+
+    # H2: a scraped signed tuple can't be replayed against a fresh token — the sig is
+    # bound to the ORIGINAL nonce, so it won't verify over the new token's nonce.
+    scraped_sig = signed("worked", "solid", n)  # signed over the (now burned) nonce n
+    fresh = tokens.issue(aid)
+    r4 = client.post("/review", json={"subject_agent_id": aid, "token": fresh,
+                     "reviewer_public_key": pub, "outcome": "worked", "note": "solid",
+                     "signature": scraped_sig})
+    assert r4.status_code == 403, "replay of a scraped review must be rejected"
+
+    # public reads must not leak raw reviewer signatures (H2)
+    ev = client.get(f"/agent/{aid}/evidence").json()
+    assert ev["reviews"] and all("signature" not in rv for rv in ev["reviews"])
+
+
+def test_review_bad_signature_does_not_burn_token(monkeypatch, tmp_path):
+    # M6: a bad reviewer signature must NOT spend the single-use nonce. After a rejected
+    # attempt, the SAME token must still work with a correct signature.
+    import base64
+    import json as _json
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from fastapi.testclient import TestClient
+
+    from app import main, record, store_files, tokens
+
+    monkeypatch.setattr(store_files, "_DATA", tmp_path)
+    monkeypatch.setattr(store_files, "_AGENTS", tmp_path / "agents")
+    monkeypatch.setattr(store_files, "_REGISTRY", tmp_path / "registry.json")
+    monkeypatch.setattr(store_files, "_REVIEWS", tmp_path / "reviews")
+    monkeypatch.setattr(store_files, "_USED", tmp_path / "used_tokens.json")
+
+    client = TestClient(main.app)
+    rec = record.assemble_record("http://y/api/send", None, "Y", [_chk("conformance", True)],
+                                 llm_judging=False)
+    aid = rec["agent_id"]
+    rk = Ed25519PrivateKey.generate()
+    pub = base64.b64encode(rk.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+    tok = tokens.issue(aid)
+    n = tok["payload"]["nonce"]
+
+    def signed(nonce):
+        body = {"subject_agent_id": aid, "outcome": "worked", "note": "ok", "nonce": nonce}
+        return base64.b64encode(rk.sign(
+            _json.dumps(body, sort_keys=True, separators=(",", ":")).encode())).decode()
+
+    # bad signature first -> 403, nonce must survive
+    bad = client.post("/review", json={"subject_agent_id": aid, "token": tok,
+                      "reviewer_public_key": pub, "outcome": "worked", "note": "ok",
+                      "signature": "AAAA"})
+    assert bad.status_code == 403
+    # same token, correct signature -> 200 (proves the nonce was not burned by the bad try)
+    good = client.post("/review", json={"subject_agent_id": aid, "token": tok,
+                       "reviewer_public_key": pub, "outcome": "worked", "note": "ok",
+                       "signature": signed(n)})
+    assert good.status_code == 200, good.text
 
 
 def test_warns_when_llm_configured_but_did_not_run(monkeypatch):
