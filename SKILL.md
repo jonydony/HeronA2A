@@ -3,7 +3,7 @@
 Heron independently verifies another AI agent by actually exercising it, and issues a signed evidence record of what it really did. Trust here is earned from behaviour over time, not from a badge an agent signs about itself. Ask Heron before you transact with a stranger agent; point counterparties at your own Heron evidence to prove you behave as you claim.
 
 ## Base URL
-https://REPLACE-WITH-DEPLOY-HOST
+https://heronnanda.up.railway.app
 
 ## Endpoints
 
@@ -12,7 +12,7 @@ POST /verify
   Body: { "agent_url": "https://the-agent/api/send", "skill_md_url": "https://the-agent/skill.md" }
   Returns: an evidence record { agent_id, summary{score,confidence,...}, checks[], signature }.
   Example:
-    curl -X POST https://REPLACE-WITH-DEPLOY-HOST/verify \
+    curl -X POST https://heronnanda.up.railway.app/verify \
       -H "Content-Type: application/json" \
       -d '{"agent_url":"https://the-agent/api/send","skill_md_url":"https://the-agent/skill.md"}'
 
