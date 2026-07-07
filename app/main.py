@@ -144,17 +144,19 @@ def review(req: ReviewRequest):
     # review can't be replayed against a different (fresh) token.
     body = {"subject_agent_id": req.subject_agent_id, "outcome": req.outcome,
             "note": req.note, "nonce": nonce}
-    # M6: verify the reviewer signature BEFORE burning the nonce, so a bad signature
+    # M6: verify the reviewer signature BEFORE touching the token, so a bad signature
     # can't spend a legitimate single-use token.
     if not sign.verify(body, req.signature, req.reviewer_public_key):
         raise HTTPException(403, "reviewer signature does not verify over the review body")
-    if not store.mark_token_used(nonce):
-        raise HTTPException(409, "token already used — one review per interaction")
-    store.append_review(req.subject_agent_id, {
+    # Fable: burn the nonce and record the review atomically, so a failed write can't
+    # burn the caller's token with no review recorded.
+    recorded = store.append_review_and_burn(req.subject_agent_id, nonce, {
         "subject_agent_id": req.subject_agent_id, "outcome": req.outcome, "note": req.note,
         "reviewer": req.reviewer_public_key, "signature": req.signature, "nonce": nonce,
         "recorded_at": _now_iso(),
     })
+    if not recorded:
+        raise HTTPException(409, "token already used — one review per interaction")
     return {"status": "recorded", "subject_agent_id": req.subject_agent_id,
             "reviews": (store.get_entry(req.subject_agent_id) or {}).get("reviews")}
 

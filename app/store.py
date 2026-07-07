@@ -21,6 +21,7 @@ get_registry = _b.get_registry
 get_entry = _b.get_entry
 mark_token_used = _b.mark_token_used
 append_review = _b.append_review
+append_review_and_burn = _b.append_review_and_burn
 get_reviews = _b.get_reviews
 
 backend = "postgres" if os.environ.get("DATABASE_URL") else "files"

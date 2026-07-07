@@ -2,6 +2,9 @@
 cryptography==49.0.0
 fastapi==0.139.0
 httpx==0.28.1
+# pinned explicitly: net.safe_request relies on httpcore honoring the sni_hostname
+# request extension for IP-pinned TLS cert verification (SSRF / DNS-rebinding guard).
+httpcore==1.0.9
 pydantic==2.13.4
 pydantic_core==2.46.4
 uvicorn[standard]==0.50.0

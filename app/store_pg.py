@@ -149,6 +149,36 @@ def mark_token_used(nonce: str) -> bool:
         return cur.rowcount == 1
 
 
+def append_review_and_burn(aid: str, nonce: str, review: dict) -> bool:
+    """Consume the token nonce AND record the review in ONE transaction, so a failed
+    review insert can't burn the caller's single-use token (Fable). Returns False if the
+    nonce was already used (enforces one review per interaction, race-safe via the PK)."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("insert into used_tokens (nonce) values (%s) on conflict (nonce) do nothing", (nonce,))
+        if cur.rowcount != 1:
+            return False  # already used; nothing appended
+        cur.execute(
+            "insert into reviews (agent_id, reviewer, outcome, note, signature, nonce, recorded_at) "
+            "values (%s,%s,%s,%s,%s,%s,%s)",
+            (aid, review["reviewer"], review["outcome"], review.get("note", ""),
+             review["signature"], review.get("nonce"), review["recorded_at"]),
+        )
+        cur.execute(
+            """
+            update agents set reviews = (
+              select jsonb_build_object(
+                'worked',  count(*) filter (where outcome='worked'),
+                'partial', count(*) filter (where outcome='partial'),
+                'failed',  count(*) filter (where outcome='failed'),
+                'total',   count(*))
+              from reviews where agent_id=%s)
+            where agent_id=%s
+            """,
+            (aid, aid),
+        )
+    return True  # committed together; if the review insert had raised, the burn rolls back
+
+
 def append_review(aid: str, review: dict) -> None:
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(

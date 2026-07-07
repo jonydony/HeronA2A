@@ -322,6 +322,21 @@ def test_warns_when_llm_configured_but_did_not_run(monkeypatch):
     assert rec["warnings"] and "cap" in rec["warnings"][0].lower()
 
 
+def test_review_write_failure_does_not_burn_token(monkeypatch):
+    # Fable: burn + record must be atomic. If the review write fails, the single-use
+    # nonce must NOT be consumed, so the caller keeps their token.
+    def boom(aid, review):
+        raise RuntimeError("write failed")
+    monkeypatch.setattr(store_files, "append_review", boom)
+
+    with pytest.raises(RuntimeError):
+        store_files.append_review_and_burn("someagent", "nonce-xyz",
+                                           {"reviewer": "k", "outcome": "worked",
+                                            "signature": "s", "recorded_at": "t"})
+    used = json.load(open(store_files._USED)) if store_files._USED.exists() else []
+    assert "nonce-xyz" not in used
+
+
 def test_trust_score_is_best_of_recent_not_last():
     # M10: an unsolicited low run must not tank the public headline. trust_score = best
     # of the last N; latest_score keeps the literal last run for transparency.

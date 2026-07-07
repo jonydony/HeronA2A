@@ -94,6 +94,18 @@ def mark_token_used(nonce: str) -> bool:
     return True
 
 
+def append_review_and_burn(aid: str, nonce: str, review: dict) -> bool:
+    # File backend (dev/test only; the deployed store is Postgres). No real transaction,
+    # so record the review FIRST and burn the nonce only after — a failed write can't
+    # cost the caller their token. Returns False if the nonce was already used.
+    used = json.loads(_USED.read_text()) if _USED.exists() else []
+    if nonce in used:
+        return False
+    append_review(aid, review)
+    mark_token_used(nonce)
+    return True
+
+
 def append_review(aid: str, review: dict) -> None:
     _REVIEWS.mkdir(parents=True, exist_ok=True)
     path = _REVIEWS / f"{aid}.json"
