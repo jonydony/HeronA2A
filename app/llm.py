@@ -24,8 +24,20 @@ _BASE = os.environ.get("HERON_LLM_BASE_URL", "").rstrip("/")
 _KEY = os.environ.get("HERON_LLM_API_KEY", "")
 _MODEL = os.environ.get("HERON_LLM_MODEL", "gpt-5.5")
 _MAX_CALLS = int(os.environ.get("HERON_LLM_MAX_CALLS", "50"))
+# If the LLM endpoint sits behind Cloudflare Access, a service token is needed
+# (CF-Access-Client-Id / -Secret headers) in addition to the API key.
+_CF_ID = os.environ.get("HERON_LLM_CF_CLIENT_ID", "")
+_CF_SECRET = os.environ.get("HERON_LLM_CF_CLIENT_SECRET", "")
 
 _calls = 0  # per-process counter (resets on redeploy)
+
+
+def _headers() -> dict:
+    h = {"Authorization": f"Bearer {_KEY}", "Content-Type": "application/json"}
+    if _CF_ID and _CF_SECRET:
+        h["CF-Access-Client-Id"] = _CF_ID
+        h["CF-Access-Client-Secret"] = _CF_SECRET
+    return h
 
 
 def configured() -> bool:
@@ -52,8 +64,8 @@ def diagnose() -> dict:
     """Temporary: make one raw call and return status + body so we can see why calls fail."""
     if not configured():
         return {"configured": False, "base": _BASE, "model": _MODEL}
-    out = {"base": _BASE, "model": _MODEL}
-    h = {"Authorization": f"Bearer {_KEY}", "Content-Type": "application/json"}
+    out = {"base": _BASE, "model": _MODEL, "cf_token_set": bool(_CF_ID and _CF_SECRET)}
+    h = _headers()
     try:
         p = httpx.post(f"{_BASE}/chat/completions", headers=h,
                        json={"model": _MODEL, "max_tokens": 50,
@@ -82,7 +94,7 @@ def _complete_json(system: str, user: str, max_tokens: int = 2048) -> dict | Non
     try:
         r = httpx.post(
             f"{_BASE}/chat/completions",
-            headers={"Authorization": f"Bearer {_KEY}", "Content-Type": "application/json"},
+            headers=_headers(),
             json={
                 "model": _MODEL,
                 "max_tokens": max_tokens,
