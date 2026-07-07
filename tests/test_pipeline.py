@@ -11,16 +11,17 @@ import asyncio
 
 import pytest
 
-from app import llm, probe, record, sign, store
+from app import llm, probe, record, sign, store, store_files
 
 
 @pytest.fixture(autouse=True)
 def _tmp_store(tmp_path, monkeypatch):
-    monkeypatch.setattr(store, "_DATA", tmp_path)
-    monkeypatch.setattr(store, "_AGENTS", tmp_path / "agents")
-    monkeypatch.setattr(store, "_REGISTRY", tmp_path / "registry.json")
-    monkeypatch.setattr(store, "_REVIEWS", tmp_path / "reviews")
-    monkeypatch.setattr(store, "_USED", tmp_path / "used_tokens.json")
+    # Tests run on the file backend (no DATABASE_URL); point it at a temp dir.
+    monkeypatch.setattr(store_files, "_DATA", tmp_path)
+    monkeypatch.setattr(store_files, "_AGENTS", tmp_path / "agents")
+    monkeypatch.setattr(store_files, "_REGISTRY", tmp_path / "registry.json")
+    monkeypatch.setattr(store_files, "_REVIEWS", tmp_path / "reviews")
+    monkeypatch.setattr(store_files, "_USED", tmp_path / "used_tokens.json")
     yield
 
 

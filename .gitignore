@@ -5,3 +5,4 @@ __pycache__/
 data/heron_ed25519.key
 data/agents/
 data/registry.json
+.env
