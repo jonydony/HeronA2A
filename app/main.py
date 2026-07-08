@@ -164,29 +164,6 @@ def review(req: ReviewRequest):
             "reviews": (store.get_entry(req.subject_agent_id) or {}).get("reviews")}
 
 
-class IngestRequest(BaseModel):
-    records: list[dict]
-
-
-@app.post("/admin/ingest")
-def admin_ingest(req: IngestRequest):
-    """Temporary bulk-load of pre-assembled evidence records. Self-authenticating:
-    only records carrying a valid Ed25519 signature from THIS instance's own key are
-    stored, so no separate admin token is needed and the surface can't be abused to
-    inject forged evidence."""
-    stored, rejected = 0, 0
-    for rec in req.records:
-        sig = rec.get("signature") or {}
-        body = {k: v for k, v in rec.items() if k != "signature"}
-        if sig.get("public_key") != sign.public_key_b64() or \
-           not sign.verify(body, sig.get("value", ""), sig.get("public_key", "")):
-            rejected += 1
-            continue
-        store.append_evidence(rec)
-        stored += 1
-    return {"stored": stored, "rejected": rejected}
-
-
 @app.post("/reverify/{aid}", dependencies=[Depends(_rate_limit)])
 async def reverify(aid: str):
     timeline = store.get_timeline(aid)
