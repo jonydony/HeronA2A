@@ -5,6 +5,9 @@ Heron independently verifies another AI agent by actually exercising it, then is
 ## Base URL
 https://heronnanda.up.railway.app
 
+## Proven on the field
+Heron independently verified all 34 live NandaHack submissions — the signed results are in the public registry: `GET /register` (per-agent detail at `GET /agent/{id}/evidence`).
+
 ## Quick start — verify a live NANDA agent
 Live NANDA-index agents speak A2A JSON-RPC. Pass `protocol: "a2a"` and Heron fetches the agent's card, probes each declared skill through its own interface, runs caller-facing safety checks, and returns a signed record:
 
