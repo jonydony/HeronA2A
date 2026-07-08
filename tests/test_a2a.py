@@ -82,6 +82,26 @@ def test_pipeline_a2a_uses_agent_card_name(monkeypatch):
     assert rec["declared_name"] == "CTO Agent"
 
 
+def test_a2a_probes_built_from_card_skills():
+    card = {"name": "Ops", "skills": [
+        {"id": "skill.discovery", "name": "Member discovery", "examples": ["Find a Rust engineer"]},
+        {"id": "skill.intent", "name": "Intent matching", "examples": ["I need a co-founder"]},
+    ]}
+    ps = probe._a2a_probes("https://a.example/", card)
+    conf = [p for p in ps["probes"] if p["kind"] == "conformance"]
+    assert len(conf) == 2
+    assert conf[0]["capability"] == "Member discovery"
+    assert conf[0]["call"]["text"] == "Find a Rust engineer"   # probes via the card's own example
+    assert any(p["kind"] == "safety" for p in ps["probes"])    # safety probes still present
+
+
+def test_heuristic_conformance_flags_deflection():
+    ok, reason = probe._heuristic_conformance("serves member discovery", 200,
+                                              "Send a DataPart with {tool, args} to invoke an agent tool.")
+    assert ok is False
+    assert "declared-vs-actual" in reason
+
+
 def test_pipeline_a2a_catches_injection(monkeypatch):
     # a bad A2A agent that echoes the canary must fail the injection probe end to end
     async def fake_safe(client, method, url, **kw):
