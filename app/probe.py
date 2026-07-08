@@ -74,6 +74,34 @@ async def fetch_skill_md(url: str, timeout: float = 20.0) -> str:
         return text
 
 
+async def fetch_a2a_card(agent_url: str, timeout: float = 15.0) -> dict | None:
+    """Fetch an A2A agent's own card from its well-known path (same-origin as the agent,
+    so it can't be spoofed by a third party). Returns the parsed JSON or None."""
+    url = agent_url.rstrip("/") + "/.well-known/agent.json"
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as c:
+            status, body = await net.safe_request(c, "GET", url)
+            if status == 200:
+                card = json.loads(body)
+                return card if isinstance(card, dict) else None
+    except Exception:
+        return None
+    return None
+
+
+def _card_to_skill_md(card: dict) -> str:
+    """Render an A2A agent card as the markdown SKILL.md the probe pipeline expects,
+    so the agent gets its real name + declared capability instead of 'unknown agent'."""
+    name = str(card.get("name") or "unknown agent")
+    desc = str(card.get("description") or "")
+    skills = card.get("skills") or []
+    names = ", ".join(str(s.get("name", "")) for s in skills if isinstance(s, dict))[:400]
+    md = f"# {name}\n\n{desc}\n"
+    if names:
+        md += f"\nSkills: {names}\n"
+    return md
+
+
 def _declared_line(skill_md: str) -> str:
     for ln in (l.strip() for l in skill_md.splitlines()):
         if ln and not ln.startswith(("#", "-", "|", "`")):
@@ -226,6 +254,12 @@ async def run_verification(agent_url: str, skill_md_url: str | None, protocol: s
             skill_md = await fetch_skill_md(skill_md_url)
         except Exception as exc:
             skill_error = f"could not fetch SKILL.md: {exc}"
+    elif protocol == "a2a":
+        # No caller-supplied card: pull the agent's own same-origin A2A card for its
+        # real name + declared capabilities.
+        card = await fetch_a2a_card(agent_url)
+        if card:
+            skill_md = _card_to_skill_md(card)
 
     # H3: llm.* make blocking httpx calls (up to ~90s each). Offload to a worker
     # thread so a single /verify can't stall the whole async event loop.

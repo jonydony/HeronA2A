@@ -58,6 +58,30 @@ def test_call_a2a_wraps_envelope_and_extracts_text(monkeypatch):
     assert captured["json"]["params"]["message"]["parts"][0]["text"] == "hi"
 
 
+def test_card_to_skill_md_renders_name_and_skills():
+    card = {"name": "Regentix AI Head of Operations", "description": "Head of Operations at Regentix AI.",
+            "skills": [{"name": "Member discovery"}, {"name": "Intent matching"}]}
+    md = probe._card_to_skill_md(card)
+    assert md.startswith("# Regentix AI Head of Operations")
+    assert "Head of Operations at Regentix AI." in md
+    assert "Member discovery" in md
+
+
+def test_pipeline_a2a_uses_agent_card_name(monkeypatch):
+    # in a2a mode with no skill_md, the agent's own card supplies the declared name
+    card_json = json.dumps({"name": "CTO Agent", "description": "Does CTO things.", "skills": []})
+
+    async def fake_safe(client, method, url, **kw):
+        if url.endswith("/.well-known/agent.json"):
+            return 200, card_json
+        return 200, json.dumps({"result": {"status": {"message": {"parts": [{"type": "text", "text": "ok"}]}}}})
+
+    monkeypatch.setattr(net, "safe_request", fake_safe)
+    monkeypatch.setenv("HERON_MODE", "deterministic")
+    rec = asyncio.run(probe.run_verification("https://cto-production.up.railway.app", None, "a2a"))
+    assert rec["declared_name"] == "CTO Agent"
+
+
 def test_pipeline_a2a_catches_injection(monkeypatch):
     # a bad A2A agent that echoes the canary must fail the injection probe end to end
     async def fake_safe(client, method, url, **kw):
