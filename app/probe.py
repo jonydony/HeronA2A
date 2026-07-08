@@ -14,8 +14,10 @@ and its HTTP responses. Heron actively exercises it and records what it actually
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
+import secrets
 
 import httpx
 
@@ -81,13 +83,19 @@ def _declared_line(skill_md: str) -> str:
 
 # --------------------------------------------------------------- probe planning
 
-def _deterministic_probes(agent_url: str, skill_md: str) -> dict:
-    """Fallback battery when no LLM: assumes a NANDA /api/send {message} shape."""
+def _deterministic_probes(agent_url: str, skill_md: str, protocol: str = "nanda") -> dict:
+    """Fallback battery when no LLM. protocol='nanda' = the legacy /api/send {message}
+    shape; protocol='a2a' = A2A JSON-RPC (tasks/send) at the runtime root, which is what
+    live NANDA-index agents actually speak."""
     desc = _declared_line(skill_md)
     name = next((l.lstrip("# ").strip() for l in skill_md.splitlines() if l.startswith("#")), "unknown agent")
 
-    def send(msg: str) -> dict:
-        return {"method": "POST", "url": agent_url, "json": {"message": msg}}
+    if protocol == "a2a":
+        def send(msg: str) -> dict:
+            return {"a2a": True, "url": agent_url, "text": msg}
+    else:
+        def send(msg: str) -> dict:
+            return {"method": "POST", "url": agent_url, "json": {"message": msg}}
 
     return {
         "agent_name": name,
@@ -111,10 +119,61 @@ def _deterministic_probes(agent_url: str, skill_md: str) -> dict:
 
 # ------------------------------------------------------------------- target I/O
 
-async def _call(client: httpx.AsyncClient, spec: dict) -> tuple[int, str]:
-    method = (spec.get("method") or "GET").upper()
+def _extract_a2a_text(data) -> str:
+    """Pull the AGENT's output out of an A2A JSON-RPC response: text parts from the
+    agent's reply + artifacts + any error message. Critically, text under a role='user'
+    message (echoed-back input, which lives in result.history) is EXCLUDED — otherwise
+    an agent that echoes our injection probe would look like it obeyed it."""
+    out: list[str] = []
+
+    def walk(x, in_user: bool = False):
+        if isinstance(x, dict):
+            err = x.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                out.append(str(err["message"]))
+            user_ctx = in_user or x.get("role") == "user"
+            for k, v in x.items():
+                if k == "role":
+                    continue
+                if k == "text" and isinstance(v, str):
+                    if not user_ctx:
+                        out.append(v)
+                else:
+                    walk(v, user_ctx)
+        elif isinstance(x, list):
+            for i in x:
+                walk(i, in_user)
+
+    walk(data)
+    return " ".join(out) if out else json.dumps(data)[:600]
+
+
+async def _call_a2a(client: httpx.AsyncClient, spec: dict) -> tuple[int, str]:
+    """POST an A2A JSON-RPC `tasks/send` envelope to the agent's root and return the
+    extracted agent text. SSRF-guarded like every other outbound hop."""
     url = spec.get("url")
+    envelope = {
+        "jsonrpc": "2.0", "id": 1, "method": "tasks/send",
+        "params": {"id": secrets.token_hex(8),
+                   "message": {"role": "user",
+                               "parts": [{"type": "text", "text": spec.get("text", "")}]}},
+    }
+    status, body = await net.safe_request(client, "POST", url, json=envelope,
+                                          headers={"Content-Type": "application/json"})
+    if status == 0 or status >= 400:
+        return status, body[:600]
     try:
+        return status, _extract_a2a_text(json.loads(body))[:600]
+    except Exception:
+        return status, body[:600]  # non-JSON body: hand back what we got
+
+
+async def _call(client: httpx.AsyncClient, spec: dict) -> tuple[int, str]:
+    try:
+        if spec.get("a2a"):
+            return await _call_a2a(client, spec)
+        method = (spec.get("method") or "GET").upper()
+        url = spec.get("url")
         # SSRF-guarded call: an LLM-planned probe can carry ANY url, so every hop
         # goes through net.safe_request (public-host check + no redirects + byte cap).
         status, body = await net.safe_request(
@@ -160,7 +219,7 @@ def _heuristic_conformance(expected: str, status: int, response: str) -> tuple[b
 
 # ------------------------------------------------------------------ orchestrate
 
-async def run_verification(agent_url: str, skill_md_url: str | None) -> dict:
+async def run_verification(agent_url: str, skill_md_url: str | None, protocol: str = "nanda") -> dict:
     skill_md, skill_error = "", None
     if skill_md_url:
         try:
@@ -173,7 +232,7 @@ async def run_verification(agent_url: str, skill_md_url: str | None) -> dict:
     probeset = None
     if llm.available() and skill_md:
         probeset = await asyncio.to_thread(llm.plan_probes, skill_md, agent_url, MAX_PROBES)
-    probeset = probeset or _deterministic_probes(agent_url, skill_md)
+    probeset = probeset or _deterministic_probes(agent_url, skill_md, protocol)
     probes = probeset["probes"][:MAX_PROBES]
 
     # 3. run every probe

@@ -55,6 +55,7 @@ def _stale(last_verified_iso: str) -> bool:
 class VerifyRequest(BaseModel):
     agent_url: str
     skill_md_url: str | None = None
+    protocol: str = "nanda"     # "nanda" = legacy /api/send {message}; "a2a" = A2A JSON-RPC tasks/send
 
 
 class ReviewRequest(BaseModel):
@@ -122,7 +123,9 @@ async def verify(req: VerifyRequest):
     # competitor's score by pointing us at a mismatched / malicious SKILL.md.
     if req.skill_md_url and not net.same_origin(req.agent_url, req.skill_md_url):
         raise HTTPException(400, "skill_md_url must be same-origin as agent_url")
-    record = await probe.run_verification(req.agent_url, req.skill_md_url)
+    if req.protocol not in ("nanda", "a2a"):
+        raise HTTPException(422, "protocol must be 'nanda' or 'a2a'")
+    record = await probe.run_verification(req.agent_url, req.skill_md_url, req.protocol)
     # Hand the caller a single-use interaction token so it can leave one review later.
     token = tokens.issue(record["agent_id"])
     return JSONResponse({**record, "interaction_token": token})
