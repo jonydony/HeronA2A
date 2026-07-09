@@ -109,6 +109,12 @@ def skill_md():
     return _SKILL_MD.read_text() if _SKILL_MD.exists() else "SKILL.md missing"
 
 
+@app.get("/health/llm")
+def health_llm():
+    """Temporary deploy diagnostic (remove after): one raw LLM call, status + body."""
+    return llm.diagnose()
+
+
 @app.post("/verify", dependencies=[Depends(_rate_limit)])
 async def verify(req: VerifyRequest):
     # SSRF gate up front: reject internal/metadata targets with a clear 400 instead of
