@@ -61,25 +61,6 @@ def max_calls() -> int:
     return _MAX_CALLS
 
 
-def diagnose() -> dict:
-    """TEMP deploy diagnostic: one raw call, status/location/body (secrets masked)."""
-    if not configured():
-        return {"configured": False, "base": _BASE, "model": _MODEL}
-    out = {"base": _BASE, "model": _MODEL, "key_len": len(_KEY),
-           "cf_id_set": bool(_CF_ID), "cf_secret_set": bool(_CF_SECRET)}
-    try:
-        p = httpx.post(f"{_BASE}/chat/completions", headers=_headers(),
-                       json={"model": _MODEL, "max_tokens": 20,
-                             "messages": [{"role": "user", "content": 'Reply only {"ok":true}'}]},
-                       timeout=30, follow_redirects=False)
-        out["post_status"] = p.status_code
-        out["post_location"] = (p.headers.get("location") or "")[:200]
-        out["post_body"] = p.text[:300]
-    except Exception as e:
-        out["post_error"] = str(e)[:300]
-    return out
-
-
 def _complete_json(system: str, user: str, max_tokens: int = 2048) -> dict | None:
     """POST an OpenAI-style chat completion, expect a JSON object back. None on any failure."""
     global _calls
